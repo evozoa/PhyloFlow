@@ -1,13 +1,23 @@
 Package: PhyloFlow
-Title: What the Package Does (One Line, Title Case)
+Title: Convert Dendritic River Networks into Phylogenetic Trees
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+    person("Michael W.", "Sandel", , "evozoa@gmail.com", role = c("aut", "cre"))
+Description: Converts dendritic river networks into rooted phylogenetic
+    trees for use as null hypotheses in phylogeographic research. Sample
+    collection sites are snapped to a stream network (either user-supplied
+    or fetched from the National Hydrography Dataset), and the connecting
+    network is converted into a tree whose branch lengths reflect stream
+    segment lengths. Also computes pairwise along-stream distances between
+    sites, optionally weighted by stream attributes, for isolation-by-distance
+    analyses.
+License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Imports: 
-    sf
+    ape,
+    igraph,
+    nhdplusTools,
+    sf,
+    stats
