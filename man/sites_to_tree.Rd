@@ -10,11 +10,12 @@ sites_to_tree(
   lat_col = "lat",
   lon_col = "lon",
   network = NULL,
-  buffer_km = 50,
+  buffer_km = 10,
   min_stream_order = 3,
   length_col = "lengthkm",
   format = "newick",
-  file = NULL
+  file = NULL,
+  collapse_singles = TRUE
 )
 }
 \arguments{
@@ -29,12 +30,13 @@ Default \code{"lat"}.}
 \item{lon_col}{Character. Column name for longitude (decimal degrees,
 WGS84). Default \code{"lon"}.}
 
-\item{network}{An \code{sf} object of stream network line segments. If
-\code{NULL}, NHD data is fetched automatically.}
+\item{network}{An \code{sf} object of stream network line segments with
+NHDPlus attributes (\code{comid}, \code{hydroseq}, \code{dnhydroseq},
+\code{streamorde}). If \code{NULL}, NHD data is fetched automatically.}
 
-\item{buffer_km}{Numeric. Buffer (km) around the bounding box of all sites
-used for NHD download. Increase if sites span a large area or if the
-common outlet is not found. Default 50.}
+\item{buffer_km}{Numeric. Search radius (km) around each site for the
+nearest qualifying stream. Default 10. Ignored for user-supplied
+networks.}
 
 \item{min_stream_order}{Integer. Minimum NHD stream order to snap samples
 to. Default 3.}
@@ -46,13 +48,24 @@ to. Default 3.}
 
 \item{file}{Character or \code{NULL}. Output file path. If \code{NULL} the
 tree is returned without writing to disk.}
+
+\item{collapse_singles}{Logical. If \code{TRUE} (default), nodes with a
+single descendant (stream segments joined without a confluence) are
+removed and their branch lengths summed.}
 }
 \value{
 An \code{ape} \code{phylo} object with tips labelled by sample ID.
 }
 \description{
 The primary user-facing function for phylogeographic workflows. Accepts a
-data frame of sample collection coordinates, downloads the connecting NHD
-stream network, and returns a rooted phylogenetic tree where each tip is a
+data frame of sample collection coordinates, finds the stream network
+connecting them, and returns a rooted phylogenetic tree where each tip is a
 sample site. Branch lengths reflect stream segment lengths.
+}
+\details{
+With automatic NHD data, each site is snapped to the nearest qualifying
+stream and traced downstream along the main stem (via the NLDI) until all
+sites meet, however far away that confluence is. Only the stream paths
+connecting the sites are downloaded, so run time scales with the number
+of sites rather than the size of the basin.
 }

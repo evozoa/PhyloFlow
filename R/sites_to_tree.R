@@ -1,9 +1,15 @@
 #' Build a phylogenetic tree from sample collection sites
 #'
 #' The primary user-facing function for phylogeographic workflows. Accepts a
-#' data frame of sample collection coordinates, downloads the connecting NHD
-#' stream network, and returns a rooted phylogenetic tree where each tip is a
+#' data frame of sample collection coordinates, finds the stream network
+#' connecting them, and returns a rooted phylogenetic tree where each tip is a
 #' sample site. Branch lengths reflect stream segment lengths.
+#'
+#' With automatic NHD data, each site is snapped to the nearest qualifying
+#' stream and traced downstream along the main stem (via the NLDI) until all
+#' sites meet, however far away that confluence is. Only the stream paths
+#' connecting the sites are downloaded, so run time scales with the number
+#' of sites rather than the size of the basin.
 #'
 #' @param sites A data frame with one row per sample site.
 #' @param site_id_col Character. Column name for sample IDs. Default
@@ -12,11 +18,12 @@
 #'   Default \code{"lat"}.
 #' @param lon_col Character. Column name for longitude (decimal degrees,
 #'   WGS84). Default \code{"lon"}.
-#' @param network An \code{sf} object of stream network line segments. If
-#'   \code{NULL}, NHD data is fetched automatically.
-#' @param buffer_km Numeric. Buffer (km) around the bounding box of all sites
-#'   used for NHD download. Increase if sites span a large area or if the
-#'   common outlet is not found. Default 50.
+#' @param network An \code{sf} object of stream network line segments with
+#'   NHDPlus attributes (\code{comid}, \code{hydroseq}, \code{dnhydroseq},
+#'   \code{streamorde}). If \code{NULL}, NHD data is fetched automatically.
+#' @param buffer_km Numeric. Search radius (km) around each site for the
+#'   nearest qualifying stream. Default 10. Ignored for user-supplied
+#'   networks.
 #' @param min_stream_order Integer. Minimum NHD stream order to snap samples
 #'   to. Default 3.
 #' @param length_col Character. Column name for segment lengths. Default
@@ -24,6 +31,9 @@
 #' @param format Character. \code{"newick"} (default) or \code{"nexus"}.
 #' @param file Character or \code{NULL}. Output file path. If \code{NULL} the
 #'   tree is returned without writing to disk.
+#' @param collapse_singles Logical. If \code{TRUE} (default), nodes with a
+#'   single descendant (stream segments joined without a confluence) are
+#'   removed and their branch lengths summed.
 #'
 #' @return An \code{ape} \code{phylo} object with tips labelled by sample ID.
 #' @export
@@ -32,11 +42,12 @@ sites_to_tree <- function(sites,
                           lat_col          = "lat",
                           lon_col          = "lon",
                           network          = NULL,
-                          buffer_km        = 50,
+                          buffer_km        = 10,
                           min_stream_order = 3,
                           length_col       = "lengthkm",
                           format           = "newick",
-                          file             = NULL) {
+                          file             = NULL,
+                          collapse_singles = TRUE) {
 
   # --- 1. Validate input ---
   req     <- c(site_id_col, lat_col, lon_col)
@@ -52,96 +63,16 @@ sites_to_tree <- function(sites,
   if (n_sites < 2)
     stop("At least 2 sample sites are required.")
 
-  # --- 2. Download NHD for bounding box + buffer ---
-  if (is.null(network)) {
-    message("Fetching NHD flowlines for study area...")
-    all_pts  <- sf::st_sfc(
-      lapply(seq_len(n_sites), function(i) sf::st_point(c(lons[i], lats[i]))),
-      crs = 4326
-    )
-    bbox_sf  <- sf::st_as_sfc(sf::st_bbox(all_pts))
-    bbox_sf  <- sf::st_sf(geometry = bbox_sf, crs = 4326)
-    bbox_buf <- sf::st_buffer(sf::st_transform(bbox_sf, crs = 5070),
-                              dist = buffer_km * 1000)
-    aoi      <- sf::st_transform(bbox_buf, crs = 4326)
-    network  <- nhdplusTools::get_nhdplus(AOI = aoi, realization = "flowline")
-    network  <- sf::st_transform(network, crs = 4326)
+  # --- 2-7. Minimal network connecting all samples down to their LCA ---
+  connected <- if (is.null(network)) {
+    connect_sites_nhd(lats, lons, buffer_km, min_stream_order, length_col)
+  } else {
+    connect_sites_local(network, lats, lons, min_stream_order)
   }
-
-  seg_ids <- as.character(network$comid)
-
-  # --- 3. Snap each sample to nearest qualifying stream ---
-  net_qual <- network[network$streamorde >= min_stream_order, ]
-  if (nrow(net_qual) == 0)
-    stop("No streams of order >= ", min_stream_order,
-         " found. Try reducing min_stream_order or increasing buffer_km.")
-
-  site_comids <- character(n_sites)
-  for (i in seq_len(n_sites)) {
-    pt             <- sf::st_sf(geometry = sf::st_sfc(
-      sf::st_point(c(lons[i], lats[i])), crs = 4326))
-    nearest        <- sf::st_nearest_feature(pt, net_qual)
-    site_comids[i] <- as.character(net_qual$comid[nearest])
-  }
-  names(site_comids) <- sample_ids
-  message("All samples snapped to stream network.")
-
-  # --- 4. Build hydroseq topology ---
-  hydroseq_to_seg   <- stats::setNames(seg_ids, as.character(network$hydroseq))
-  parent_seg        <- hydroseq_to_seg[as.character(network$dnhydroseq)]
-  names(parent_seg) <- seg_ids
-
-  # --- 5. Find lowest common ancestor (LCA) of all sample COMIDs ---
-  get_path_to_outlet <- function(start_comid) {
-    path    <- character(0)
-    current <- start_comid
-    visited <- character(0)
-    while (!is.na(current) && current %in% seg_ids && !current %in% visited) {
-      visited <- c(visited, current)
-      path    <- c(path, current)
-      current <- parent_seg[current]
-    }
-    path
-  }
-
-  unique_sample_comids <- unique(site_comids)
-  paths  <- lapply(unique_sample_comids, get_path_to_outlet)
-  common <- Reduce(intersect, paths)
-
-  if (length(common) == 0)
-    stop("No common ancestor found for all sample sites. ",
-         "Try increasing buffer_km.")
-
-  hydroseq_vals <- network$hydroseq[match(common, seg_ids)]
-  lca_comid     <- common[which.max(hydroseq_vals)]
-  message("Common outlet found: COMID ", lca_comid)
-
-  # --- 6. Extract subnetwork upstream of LCA ---
-  net_df         <- sf::st_drop_geometry(network)
-  net_df$tocomid <- as.integer(hydroseq_to_seg[as.character(network$dnhydroseq)])
-  net_df$tocomid[is.na(net_df$tocomid)] <- 0L
-
-  upstream_ids <- nhdplusTools::get_UT(network = net_df,
-                                       comid   = as.integer(lca_comid))
-  upstream_net <- network[network$comid %in% upstream_ids, ]
-  up_seg_ids   <- as.character(upstream_net$comid)
-  up_parent    <- stats::setNames(
-    hydroseq_to_seg[as.character(upstream_net$dnhydroseq)],
-    up_seg_ids
-  )
-
-  # --- 7. Build minimal connecting network ---
-  # Keep only COMIDs on the path from each sample downstream to the LCA.
-  # This is the minimal Steiner tree connecting all samples via the stream network.
-  keep_set <- character(0)
-  for (sc in unique_sample_comids) {
-    current <- sc
-    while (!is.na(current) && current %in% up_seg_ids) {
-      keep_set <- c(keep_set, current)
-      current  <- up_parent[current]
-    }
-  }
-  keep_set <- unique(keep_set)
+  pruned_net      <- connected$pruned_net
+  site_comids     <- connected$site_comids
+  hydroseq_to_seg <- connected$hydroseq_to_seg
+  names(site_comids)   <- sample_ids
 
   # --- 8. Build tree from minimal network ---
   build_children <- function(seg_set, parent_vec) {
@@ -151,7 +82,6 @@ sites_to_tree <- function(sites,
     split(seg_set[valid], par[valid])
   }
 
-  pruned_net <- upstream_net[upstream_net$comid %in% keep_set, ]
   p_seg_ids  <- as.character(pruned_net$comid)
 
   if (!is.null(length_col) && length_col %in% names(pruned_net)) {
@@ -241,6 +171,9 @@ sites_to_tree <- function(sites,
     class = "phylo"
   )
 
+  if (collapse_singles && n_tips >= 2)
+    phylo_tree <- ape::collapse.singles(phylo_tree)
+
   if (!is.null(file)) {
     if (format == "newick")     ape::write.tree(phylo_tree, file = file)
     else if (format == "nexus") ape::write.nexus(phylo_tree, file = file)
@@ -250,4 +183,107 @@ sites_to_tree <- function(sites,
   } else {
     phylo_tree
   }
+}
+
+# Snap sites to NHD, trace each downstream via the NLDI, and keep the path
+# segments above the first segment shared by all sites
+connect_sites_nhd <- function(lats, lons, buffer_km, min_stream_order,
+                              length_col) {
+  n_sites <- length(lats)
+  message("Snapping ", n_sites, " sites to the NHD network (",
+          format_seconds(1.5 * n_sites), ")...")
+  site_comids <- vapply(seq_len(n_sites), function(i) {
+    snapped <- suppressMessages(
+      snap_to_network(lats[i], lons[i], buffer_km = buffer_km,
+                      min_stream_order = min_stream_order)
+    )
+    as.character(snapped$network$comid[snapped$segment_id])
+  }, character(1))
+
+  unique_comids <- unique(site_comids)
+  message("Tracing ", length(unique_comids), " site(s) downstream (",
+          format_seconds(2.5 * length(unique_comids)), ")...")
+  paths <- lapply(unique_comids, function(comid) {
+    dm <- nhdplusTools::navigate_nldi(
+      list(featureSource = "comid", featureID = comid),
+      mode = "DM", data_source = "flowlines", distance_km = 9999
+    )
+    unique(c(comid, as.character(dm$DM_flowlines$nhdplus_comid)))
+  })
+
+  common <- Reduce(intersect, paths)
+  if (length(common) == 0)
+    stop("The sites do not share a downstream outlet: they drain to the ",
+         "sea (or to closed basins) separately, so no single stream tree ",
+         "connects them.")
+
+  all_ids <- unique(unlist(paths))
+  message("Downloading ", length(all_ids), " connecting segments (",
+          format_seconds(3 + 0.0085 * length(all_ids)), ")...")
+  net <- nhdplusTools::get_nhdplus(
+    comid = as.integer(all_ids), realization = "flowline",
+    properties = unique(c("comid", "hydroseq", "dnhydroseq", "streamorde",
+                          length_col)),
+    skip_geometry = !is.null(length_col)
+  )
+  if (inherits(net, "sf")) net <- sf::st_transform(net, crs = 4326)
+
+  seg_ids   <- as.character(net$comid)
+  lca_comid <- common[which.max(net$hydroseq[match(common, seg_ids)])]
+  message("Common outlet found: COMID ", lca_comid)
+
+  keep <- setdiff(all_ids, setdiff(common, lca_comid))
+  list(pruned_net      = net[seg_ids %in% keep, ],
+       site_comids     = site_comids,
+       hydroseq_to_seg = stats::setNames(seg_ids, as.character(net$hydroseq)))
+}
+
+# Snap sites to a user-supplied NHD-attributed network and keep each site's
+# path down to the most upstream segment shared by all sites
+connect_sites_local <- function(network, lats, lons, min_stream_order) {
+  network <- sf::st_transform(network, crs = 4326)
+  seg_ids <- as.character(network$comid)
+
+  net_qual <- network[network$streamorde >= min_stream_order, ]
+  if (nrow(net_qual) == 0)
+    stop("No streams of order >= ", min_stream_order,
+         " found. Try reducing min_stream_order.")
+
+  site_comids <- character(length(lats))
+  for (i in seq_along(lats)) {
+    pt             <- sf::st_sf(geometry = sf::st_sfc(
+      sf::st_point(c(lons[i], lats[i])), crs = 4326))
+    nearest        <- sf::st_nearest_feature(pt, net_qual)
+    site_comids[i] <- as.character(net_qual$comid[nearest])
+  }
+  message("All samples snapped to stream network.")
+
+  hydroseq_to_seg   <- stats::setNames(seg_ids, as.character(network$hydroseq))
+  parent_seg        <- hydroseq_to_seg[as.character(network$dnhydroseq)]
+  names(parent_seg) <- seg_ids
+
+  get_path_to_outlet <- function(start_comid) {
+    path    <- character(0)
+    current <- start_comid
+    while (!is.na(current) && current %in% seg_ids && !current %in% path) {
+      path    <- c(path, current)
+      current <- parent_seg[[current]]
+    }
+    path
+  }
+
+  paths  <- lapply(unique(site_comids), get_path_to_outlet)
+  common <- Reduce(intersect, paths)
+  if (length(common) == 0)
+    stop("No common ancestor found for all sample sites within the ",
+         "supplied network.")
+
+  hydroseq_vals <- network$hydroseq[match(common, seg_ids)]
+  lca_comid     <- common[which.max(hydroseq_vals)]
+  message("Common outlet found: COMID ", lca_comid)
+
+  keep <- setdiff(unique(unlist(paths)), setdiff(common, lca_comid))
+  list(pruned_net      = network[seg_ids %in% keep, ],
+       site_comids     = site_comids,
+       hydroseq_to_seg = hydroseq_to_seg)
 }
