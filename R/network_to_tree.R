@@ -21,6 +21,10 @@
 #' @param format Character. \code{"newick"} (default) or \code{"nexus"}.
 #' @param file Character or \code{NULL}. Output file path. If \code{NULL} the
 #'   tree is returned without writing to disk.
+#' @param collapse_singles Logical. If \code{TRUE} (default), nodes with a
+#'   single descendant (segments joined without a confluence, common in NHD
+#'   data and after filtering by stream order) are removed and their branch
+#'   lengths summed, as many phylogenetic tools reject such nodes.
 #'
 #' @return An \code{ape} \code{phylo} object.
 #' @export
@@ -28,7 +32,8 @@ network_to_tree <- function(upstream_network,
                             segment_col = "comid",
                             length_col = NULL,
                             from_col = "fromnode", to_col = "tonode",
-                            format = "newick", file = NULL) {
+                            format = "newick", file = NULL,
+                            collapse_singles = TRUE) {
 
   # --- Branch lengths ---
   if (is.null(length_col)) {
@@ -164,6 +169,11 @@ network_to_tree <- function(upstream_network,
          Nnode       = as.integer(n_internal)),
     class = "phylo"
   )
+
+  if (n_tips < 2)
+    stop("Network has no branching (a single unbranched stream). ",
+         "Use a finer resolution or a point further downstream.")
+  if (collapse_singles) phylo_tree <- ape::collapse.singles(phylo_tree)
 
   if (!is.null(file)) {
     if (format == "newick")      ape::write.tree(phylo_tree, file = file)

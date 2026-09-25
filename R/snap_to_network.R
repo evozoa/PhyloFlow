@@ -4,15 +4,17 @@
 #' @param lon Numeric. Longitude in decimal degrees (WGS84).
 #' @param network An \code{sf} object of stream network line segments.
 #'   If \code{NULL}, NHD flowlines are fetched automatically.
-#' @param buffer_km Numeric. Buffer radius (km) for NHD download. Default 50.
+#' @param buffer_km Numeric. Buffer radius (km) for NHD download. Default 10.
 #' @param min_stream_order Integer. Minimum NHD stream order to snap to when
 #'   using automatic NHD data. Prevents snapping to small headwater ditches.
 #'   Default is 3. Ignored when \code{network} is user-supplied.
 #'
 #' @return A named list with \code{point} (sf), \code{network} (sf), and
-#'   \code{segment_id} (row index of nearest qualifying segment).
+#'   \code{segment_id} (row index of nearest qualifying segment). For
+#'   automatic NHD data, \code{network} holds only segments of at least
+#'   \code{min_stream_order}.
 #' @export
-snap_to_network <- function(lat, lon, network = NULL, buffer_km = 50,
+snap_to_network <- function(lat, lon, network = NULL, buffer_km = 10,
                             min_stream_order = 3) {
   point <- sf::st_sfc(sf::st_point(c(lon, lat)), crs = 4326)
   point_sf <- sf::st_sf(geometry = point)
@@ -24,16 +26,14 @@ snap_to_network <- function(lat, lon, network = NULL, buffer_km = 50,
       dist = buffer_km * 1000
     )
     aoi <- sf::st_transform(aoi, crs = 4326)
-    network <- nhdplusTools::get_nhdplus(AOI = aoi, realization = "flowline")
-    network <- sf::st_transform(network, crs = 4326)
-
-    candidates <- network[network$streamorde >= min_stream_order, ]
-    if (nrow(candidates) == 0) {
+    network <- nhdplusTools::get_nhdplus(AOI = aoi, realization = "flowline",
+                                         streamorder = min_stream_order)
+    if (is.null(network) || nrow(network) == 0) {
       stop("No streams of order >= ", min_stream_order,
            " found within ", buffer_km, " km. Try reducing min_stream_order or increasing buffer_km.")
     }
-    nearest_row <- sf::st_nearest_feature(point_sf, candidates)
-    segment_id <- which(network$comid == candidates$comid[nearest_row])[1]
+    network <- sf::st_transform(network, crs = 4326)
+    segment_id <- sf::st_nearest_feature(point_sf, network)
   } else {
     network <- sf::st_transform(network, crs = 4326)
     segment_id <- sf::st_nearest_feature(point_sf, network)

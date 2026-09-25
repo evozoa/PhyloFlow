@@ -4,7 +4,7 @@
 \alias{snap_to_network}
 \title{Snap a GPS coordinate to the nearest stream network segment}
 \usage{
-snap_to_network(lat, lon, network = NULL, buffer_km = 50, min_stream_order = 3)
+snap_to_network(lat, lon, network = NULL, buffer_km = 10, min_stream_order = 3)
 }
 \arguments{
 \item{lat}{Numeric. Latitude in decimal degrees (WGS84).}
@@ -14,7 +14,7 @@ snap_to_network(lat, lon, network = NULL, buffer_km = 50, min_stream_order = 3)
 \item{network}{An \code{sf} object of stream network line segments.
 If \code{NULL}, NHD flowlines are fetched automatically.}
 
-\item{buffer_km}{Numeric. Buffer radius (km) for NHD download. Default 50.}
+\item{buffer_km}{Numeric. Buffer radius (km) for NHD download. Default 10.}
 
 \item{min_stream_order}{Integer. Minimum NHD stream order to snap to when
 using automatic NHD data. Prevents snapping to small headwater ditches.
@@ -22,7 +22,9 @@ Default is 3. Ignored when \code{network} is user-supplied.}
 }
 \value{
 A named list with \code{point} (sf), \code{network} (sf), and
-\code{segment_id} (row index of nearest qualifying segment).
+\code{segment_id} (row index of nearest qualifying segment). For
+automatic NHD data, \code{network} holds only segments of at least
+\code{min_stream_order}.
 }
 \description{
 Snap a GPS coordinate to the nearest stream network segment

@@ -8,10 +8,12 @@ extract_upstream(
   lat,
   lon,
   network = NULL,
+  resolution = NULL,
   from_col = "fromnode",
   to_col = "tonode",
-  buffer_km = 50,
-  min_stream_order = 3
+  buffer_km = 10,
+  min_stream_order = 3,
+  max_area_km2 = 1e+05
 )
 }
 \arguments{
@@ -22,21 +24,41 @@ extract_upstream(
 \item{network}{An \code{sf} object of stream network line segments.
 If \code{NULL}, NHD data is fetched and traversed automatically.}
 
+\item{resolution}{Integer or \code{NULL}. Minimum NHD stream order to
+include in the extracted network: 1 keeps every mapped stream, higher
+values keep only larger streams. If \code{NULL} (default), the user is
+asked. Ignored for user-supplied networks.}
+
 \item{from_col}{Character. Column for upstream node ID in user-supplied
 networks. Default \code{"fromnode"}.}
 
 \item{to_col}{Character. Column for downstream node ID in user-supplied
 networks. Default \code{"tonode"}.}
 
-\item{buffer_km}{Numeric. Buffer radius (km) for NHD download. Default 50.}
+\item{buffer_km}{Numeric. Search radius (km) for the nearest qualifying
+stream when snapping the point. Default 10.}
 
 \item{min_stream_order}{Integer. Minimum NHD stream order to snap to.
 Default 3. Ignored for user-supplied networks.}
+
+\item{max_area_km2}{Numeric. Largest drainage area (km^2) to extract.
+Default 100000. See \code{survey_upstream}.}
 }
 \value{
-An \code{sf} object of all stream segments upstream of the input point.
+An \code{sf} object of all stream segments upstream of the input
+point (of at least order \code{resolution} for NHD data).
 }
 \description{
-For automatic NHD data, uses local hydrosequence topology for accurate
-upstream routing. For user-supplied networks, traverses the graph using igraph.
+For automatic NHD data, the point is snapped to the nearest qualifying
+stream, the full drainage basin upstream of it is surveyed, and only
+segments of at least the chosen stream order are downloaded. For
+user-supplied networks, traverses the graph using igraph.
+}
+\details{
+Whole basins can contain many thousands of segments, so for NHD data the
+resolution (minimum stream order) must be chosen. If \code{resolution} is
+\code{NULL} in an interactive session, the basin is surveyed and a menu of
+resolutions is shown with estimated segment counts and download times. In
+a non-interactive session the survey is printed and an error asks for
+\code{resolution} to be set.
 }

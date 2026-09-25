@@ -11,7 +11,8 @@ network_to_tree(
   from_col = "fromnode",
   to_col = "tonode",
   format = "newick",
-  file = NULL
+  file = NULL,
+  collapse_singles = TRUE
 )
 }
 \arguments{
@@ -35,6 +36,11 @@ Default \code{"tonode"}.}
 
 \item{file}{Character or \code{NULL}. Output file path. If \code{NULL} the
 tree is returned without writing to disk.}
+
+\item{collapse_singles}{Logical. If \code{TRUE} (default), nodes with a
+single descendant (segments joined without a confluence, common in NHD
+data and after filtering by stream order) are removed and their branch
+lengths summed, as many phylogenetic tools reject such nodes.}
 }
 \value{
 An \code{ape} \code{phylo} object.

@@ -14,10 +14,13 @@ Description: Converts dendritic river networks into rooted phylogenetic
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 Imports: 
     ape,
+    curl,
     igraph,
+    jsonlite,
     nhdplusTools,
     sf,
-    stats
+    stats,
+    utils
+Config/roxygen2/version: 8.1.0
