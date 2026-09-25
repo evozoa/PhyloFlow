@@ -74,6 +74,16 @@ sites_to_tree <- function(sites,
   hydroseq_to_seg <- connected$hydroseq_to_seg
   names(site_comids)   <- sample_ids
 
+  # With every sample on one segment there is no stream structure to
+  # resolve, so the samples form a star with zero-length branches
+  if (length(unique(site_comids)) == 1) {
+    message("All samples snapped to the same stream segment; returning a ",
+            "star tree with zero-length branches.")
+    phylo_tree <- ape::stree(n_sites, tip.label = sample_ids)
+    phylo_tree$edge.length <- rep(0, n_sites)
+    return(output_tree(phylo_tree, format, file))
+  }
+
   # --- 8. Build tree from minimal network ---
   build_children <- function(seg_set, parent_vec) {
     par   <- parent_vec[seg_set]
@@ -129,14 +139,14 @@ sites_to_tree <- function(sites,
   n_internal    <- length(internal_segs)
 
   # --- 9. Label tips with sample IDs ---
-  comid_to_sample <- stats::setNames(sample_ids, site_comids)
-  tip_labels <- ifelse(
-    tip_segs %in% names(comid_to_sample),
-    comid_to_sample[tip_segs],
-    tip_segs
-  )
+  # Samples sharing a tip segment are labelled by the first for now and
+  # expanded into a polytomy once the tree is assembled
+  samples_by_seg <- split(sample_ids, site_comids)
+  tip_labels <- vapply(tip_segs, function(seg) {
+    if (seg %in% names(samples_by_seg)) samples_by_seg[[seg]][1] else seg
+  }, character(1), USE.NAMES = FALSE)
 
-  unmapped <- tip_segs[!tip_segs %in% names(comid_to_sample)]
+  unmapped <- tip_segs[!tip_segs %in% names(samples_by_seg)]
   if (length(unmapped) > 0)
     warning(length(unmapped), " tip(s) labelled by COMID (not matched to a sample ID).")
 
@@ -171,18 +181,35 @@ sites_to_tree <- function(sites,
     class = "phylo"
   )
 
-  if (collapse_singles && n_tips >= 2)
+  # Samples snapped to the same tip segment cannot be ordered along it, so
+  # each gets a zero-length branch from a shared node at the segment's tip
+  shared <- samples_by_seg[names(samples_by_seg) %in% tip_segs &
+                             vapply(samples_by_seg, length, integer(1)) > 1]
+  for (seg in names(shared)) {
+    star <- ape::stree(length(shared[[seg]]), tip.label = shared[[seg]])
+    star$edge.length <- rep(0, nrow(star$edge))
+    where <- match(shared[[seg]][1], phylo_tree$tip.label)
+    phylo_tree <- ape::bind.tree(phylo_tree, star, where = where)
+  }
+  if (length(shared) > 0)
+    message("Samples sharing a stream segment were joined by zero-length ",
+            "branches: ", paste(vapply(shared, paste, character(1),
+                                       collapse = "/"), collapse = ", "))
+
+  if (collapse_singles && ape::Ntip(phylo_tree) >= 2)
     phylo_tree <- ape::collapse.singles(phylo_tree)
 
-  if (!is.null(file)) {
-    if (format == "newick")     ape::write.tree(phylo_tree, file = file)
-    else if (format == "nexus") ape::write.nexus(phylo_tree, file = file)
-    else stop("format must be 'newick' or 'nexus'")
-    message("Tree written to: ", file)
-    invisible(phylo_tree)
-  } else {
-    phylo_tree
-  }
+  output_tree(phylo_tree, format, file)
+}
+
+# Write the tree to file if requested, otherwise return it
+output_tree <- function(phylo_tree, format, file) {
+  if (is.null(file)) return(phylo_tree)
+  if (format == "newick")     ape::write.tree(phylo_tree, file = file)
+  else if (format == "nexus") ape::write.nexus(phylo_tree, file = file)
+  else stop("format must be 'newick' or 'nexus'")
+  message("Tree written to: ", file)
+  invisible(phylo_tree)
 }
 
 # Snap sites to NHD, trace each downstream via the NLDI, and keep the path
